@@ -1,5 +1,5 @@
 import bpy
-from bpy.types import Panel, PropertyGroup, AddonPreferences, UIList
+from bpy.types import Panel, PropertyGroup, AddonPreferences, UIList, Operator
 from bpy.props import EnumProperty, StringProperty
 
 bl_info = {
@@ -7,7 +7,7 @@ bl_info = {
     "author" : "Rivin",
     "description" : "Allows you to edit futher parts of node group I/O",
     "blender" : (2, 83, 9),
-    "version" : (1, 0, 0),
+    "version" : (1, 0, 1),
     "location" : "Node > UI > Node",
     "category" : "Node"
 }
@@ -42,7 +42,7 @@ class ANGE_UL_Ports(UIList):
         layout.label(text= item.name)
 classes.append(ANGE_UL_Ports)
 
-class ANGE_PT_AdvancedEdit(bpy.types.Panel):
+class ANGE_PT_AdvancedEdit(Panel):
     bl_idname = "ANGE_PT_AdvancedEdit"
     bl_label = "Advanced"
     bl_space_type = "NODE_EDITOR"
@@ -57,11 +57,6 @@ class ANGE_PT_AdvancedEdit(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         ANGE = context.preferences.addons[__name__].preferences
-        active = bpy.context.object.active_material.node_tree.nodes.active.node_tree
-        port, socket, index = getPort(active)
-        if ANGE.NodeSelectionIdentifier != port.identifier:
-            ANGE.NodeSelectionIdentifier = port.identifier
-            ANGE.NodeSockets = getDefaultSocket(active, port, index)
         active = bpy.context.object.active_material.node_tree.nodes.active.node_tree    
         if not bpy.ops.node.tree_path_parent.poll():
             row = layout.row()
@@ -71,11 +66,33 @@ class ANGE_PT_AdvancedEdit(bpy.types.Panel):
             col = row.column()
             col.label(text= 'Output:')
             col.template_list('ANGE_UL_Ports', '', active, 'outputs', active, 'active_output')
-        layout.prop(ANGE, 'NodeSockets', text= "Socket")
+        row = layout.row(align= True)
+        col = row.column(align= True)
+        col.scale_x = 3
+        col.prop(ANGE, 'NodeSockets', text= "Socket")
+        row.operator(ANGE_OT_GetTypeOfSelected.bl_idname, text= '', icon= 'EYEDROPPER')
         layout.operator(ANGE_OT_Apply.bl_idname, text= 'Apply')
 classes.append(ANGE_PT_AdvancedEdit)
 
-class ANGE_OT_Apply(bpy.types.Operator):
+class ANGE_OT_GetTypeOfSelected(Operator):
+    bl_idname = "ange.get_type_of_selected"
+    bl_label = "Get Type of Selected"
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, context):
+        active = bpy.context.object.active_material.node_tree.nodes.active
+        return active != None and active.type == 'GROUP' and (active.node_tree.active_output != -1 or active.node_tree.active_input != -1)
+
+    def execute(self, context):
+        ANGE = context.preferences.addons[__name__].preferences
+        active = bpy.context.object.active_material.node_tree.nodes.active.node_tree
+        port, socket, index = getPort(active)
+        ANGE.NodeSockets = getDefaultSocket(active, port, index)
+        return {"FINISHED"}
+classes.append(ANGE_OT_GetTypeOfSelected)
+
+class ANGE_OT_Apply(Operator):
     bl_idname = "ange.apply"
     bl_label = "Apply"
     bl_description = "Apply changes"
@@ -91,7 +108,17 @@ class ANGE_OT_Apply(bpy.types.Operator):
         active = context.object.active_material.node_tree.nodes.active.node_tree
         port, socket, index = getPort(active)
         socketType = ANGE.NodeSockets
+
+        #Copy Data
         new = socket.new(socketType, port.name)
+        default = eval("bpy.types." + socketType + ".bl_rna.properties['default_value']")
+        if default.is_array:
+            new.default_value = default.default_array
+        else:
+            new.default_value = default.default
+        if hasattr(new, 'min_value'):
+            new.min_value = default.soft_min
+            new.max_value = default.soft_max
 
         # Copy Links
         portType = 'OUTPUT' if new.is_output else 'INPUT'
@@ -145,7 +172,6 @@ class ANGE_Prop(AddonPreferences):
                     ('NodeSocketShader', 'Shader', ''),
                     ('NodeSocketObject', 'Object', 'type Object')]
     NodeSockets : EnumProperty(items= SocketItems, name='Sockets', description='All available Sockets for a Node')
-    NodeSelectionIdentifier : StringProperty(name = "INTERNAL")
 classes.append(ANGE_Prop)
 
 def register():
