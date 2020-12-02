@@ -1,30 +1,41 @@
 import bpy
 from bpy.types import Panel, PropertyGroup, AddonPreferences, UIList
-from bpy.props import EnumProperty
+from bpy.props import EnumProperty, StringProperty
 
 bl_info = {
     "name" : "Advanced NodeGroup Editing",
     "author" : "Rivin",
     "description" : "Allows you to edit futher parts of node group I/O",
     "blender" : (2, 83, 9),
-    "version" : (0, 0, 1),
+    "version" : (1, 0, 0),
     "location" : "Node > UI > Node",
     "category" : "Node"
 }
 
 classes = []
 
-def getPort(active, tree=None):
-    if tree == None:
-        tree = active
-    port = None
-    if tree.active_output != -1:
-        Nout = tree.active_output
-        port = active.outputs[Nout]
-    elif tree.active_input != -1:
-        Nin = tree.active_input
-        port = active.inputs[Nin]
-    return port
+def getPort(active):
+    if active.active_output != -1:
+        index = active.active_output
+        socketTyp = active.outputs
+    elif active.active_input != -1:
+        index = active.active_input
+        socketTyp = active.inputs
+    return (socketTyp[index], socketTyp, index)
+
+def FindNodeOfSocket(nodes, Type):
+    for node in nodes:
+        if node.type == 'GROUP_' + Type:
+            return node
+
+def getDefaultSocket(active, port, index):
+    portType = 'OUTPUT' if port.is_output else 'INPUT'
+    node = FindNodeOfSocket(active.nodes, portType)
+    if portType == 'OUTPUT':
+        nodePort = node.inputs[index]
+    else:
+        nodePort = node.outputs[index]
+    return nodePort.bl_idname
 
 class ANGE_UL_Ports(UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
@@ -32,7 +43,7 @@ class ANGE_UL_Ports(UIList):
 classes.append(ANGE_UL_Ports)
 
 class ANGE_PT_AdvancedEdit(bpy.types.Panel):
-    bl_idname = "ANGE.ANGE_PT_advancededit"
+    bl_idname = "ANGE_PT_AdvancedEdit"
     bl_label = "Advanced"
     bl_space_type = "NODE_EDITOR"
     bl_region_type = "UI"
@@ -41,11 +52,16 @@ class ANGE_PT_AdvancedEdit(bpy.types.Panel):
     @classmethod
     def poll(cls, context):
         active = bpy.context.object.active_material.node_tree.nodes.active
-        return active.type == 'GROUP' and (active.node_tree.active_output != -1 or active.node_tree.active_input != -1)
+        return active != None and active.type == 'GROUP' and (active.node_tree.active_output != -1 or active.node_tree.active_input != -1)
 
     def draw(self, context):
         layout = self.layout
         ANGE = context.preferences.addons[__name__].preferences
+        active = bpy.context.object.active_material.node_tree.nodes.active.node_tree
+        port, socket, index = getPort(active)
+        if ANGE.NodeSelectionIdentifier != port.identifier:
+            ANGE.NodeSelectionIdentifier = port.identifier
+            ANGE.NodeSockets = getDefaultSocket(active, port, index)
         active = bpy.context.object.active_material.node_tree.nodes.active.node_tree    
         if not bpy.ops.node.tree_path_parent.poll():
             row = layout.row()
@@ -55,7 +71,7 @@ class ANGE_PT_AdvancedEdit(bpy.types.Panel):
             col = row.column()
             col.label(text= 'Output:')
             col.template_list('ANGE_UL_Ports', '', active, 'outputs', active, 'active_output')
-        layout.prop(ANGE, 'NodeType')
+        layout.prop(ANGE, 'NodeSockets', text= "Socket")
         layout.operator(ANGE_OT_Apply.bl_idname, text= 'Apply')
 classes.append(ANGE_PT_AdvancedEdit)
 
@@ -68,37 +84,76 @@ class ANGE_OT_Apply(bpy.types.Operator):
     @classmethod
     def poll(cls, context):
         active = bpy.context.object.active_material.node_tree.nodes.active
-        return active.type == 'GROUP' and (active.node_tree.active_output != -1 or active.node_tree.active_input != -1)
+        return active != None and active.type == 'GROUP' and (active.node_tree.active_output != -1 or active.node_tree.active_input != -1)
 
     def execute(self, context):
         ANGE = context.preferences.addons[__name__].preferences
-        active = context.object.active_material.node_tree.nodes.active
-        port = getPort(active, active.node_tree)
-        exec('port.type = ANGE.NodeType')
+        active = context.object.active_material.node_tree.nodes.active.node_tree
+        port, socket, index = getPort(active)
+        socketType = ANGE.NodeSockets
+        new = socket.new(socketType, port.name)
+
+        # Copy Links
+        portType = 'OUTPUT' if new.is_output else 'INPUT'
+        node = FindNodeOfSocket(active.nodes, portType)
+        if portType == 'OUTPUT':
+            nodeSocket = node.inputs
+            nodePort = nodeSocket[index]
+            for link in nodePort.links:
+                active.links.new(nodeSocket[-2], link.from_socket)
+        else:
+            nodeSocket = node.outputs
+            nodePort = nodeSocket[index]
+            for link in nodePort.links:
+                active.links.new(link.to_socket, nodeSocket[-2])
+
+        # Move Socket 
+        socket.move(len(socket) - 1, index)
+        socket.remove(port)
+        if portType == 'OUTPUT':
+            active.active_output = index
+        else:
+            active.active_input = index
         return {"FINISHED"}
 classes.append(ANGE_OT_Apply)
 
-def ItemsTypes(scene, context):
-    l = []
-    node = context.object.active_material.node_tree.nodes.active
-    if hasattr(node, 'node_tree'):
-        active = node.node_tree
-        port = getPort(active)
-        if port != None:
-            for prop in port.bl_rna.properties['type'].enum_items:
-                l.append((prop.identifier, prop.name, prop.description, prop.icon, prop.value))
-    return l
+
 
 class ANGE_Prop(AddonPreferences):
     bl_idname = __name__
-
-    NodeType : EnumProperty(items= ItemsTypes, name='Type', description= 'Data type')
+    SocketItems = [('NodeSocketBool','Bool','boolean'),
+                    ('NodeSocketString', 'String', 'string'),
+                    ('NodeSocketFloat', 'Float', 'float in [-inf, inf]'),
+                    ('NodeSocketFloatAngle', 'Float (Angle)', 'float in [-inf, inf]'),
+                    ('NodeSocketFloatFactor', 'Float (Factor)', 'float in [0, 1]'),
+                    ('NodeSocketFloatPercentage', 'Float (Percentage)', 'float in [-inf, inf]'),
+                    ('NodeSocketFloatTime', 'Float (Time)', 'float in [-inf, inf]'),
+                    ('NodeSocketFloatUnsigned', 'Float (Unsigned)', 'float in [0, inf]'),
+                    ('NodeSocketInt', 'Int', 'int in [-inf, inf]'),
+                    ('NodeSocketIntFactor', 'Int (Factor)', 'int in [0, inf]'),
+                    ('NodeSocketIntPercentage', 'Int (Percentage)', 'int in [0, inf]'),
+                    ('NodeSocketIntUnsigned', 'Int (Unsigned)', 'int in [0, inf]'),
+                    ('NodeSocketVector', 'Vector', 'float array of 3 items in [-inf, inf]'),
+                    ('NodeSocketVectorAcceleration', 'Vector (Acceleration)', 'float array of 3 items in [-inf, inf]'),
+                    ('NodeSocketVectorDirection', 'Vector (Direction)', 'float array of 3 items in [-inf, inf]'),
+                    ('NodeSocketVectorEuler', 'Vector (Euler)', 'float array of 3 items in [-inf, inf]'),
+                    ('NodeSocketVectorTranslation', 'Vector (Translation)', 'float array of 3 items in [-inf, inf]'),
+                    ('NodeSocketVectorVelocity', 'Vector (Velocity)', 'float array of 3 items in [-inf, inf]'),
+                    ('NodeSocketVectorXYZ', 'Vector (XYZ)', 'float array of 3 items in [-inf, inf]'),
+                    ('NodeSocketColor', 'Color', 'float array of 4 items in [0, inf]'),
+                    ('NodeSocketImage', 'Image', 'type Image'),
+                    ('NodeSocketShader', 'Shader', ''),
+                    ('NodeSocketObject', 'Object', 'type Object')]
+    NodeSockets : EnumProperty(items= SocketItems, name='Sockets', description='All available Sockets for a Node')
+    NodeSelectionIdentifier : StringProperty(name = "INTERNAL")
 classes.append(ANGE_Prop)
 
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
+    print("-- Registered Advanced NodeGroup Editing --")
 
 def unregister():
     for cls in classes:
         bpy.utils.unregister_class(cls)
+    print("-- Unregistered Advanced NodeGroup Editing --")
