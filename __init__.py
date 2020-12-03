@@ -7,7 +7,7 @@ bl_info = {
     "author" : "Rivin",
     "description" : "Allows you to edit futher parts of node group I/O",
     "blender" : (2, 83, 9),
-    "version" : (1, 0, 2),
+    "version" : (1, 0, 3),
     "location" : "Node > UI > Node",
     "category" : "Node"
 }
@@ -61,7 +61,8 @@ class ANGE_PT_AdvancedEdit(Panel):
     def draw(self, context):
         layout = self.layout
         ANGE = context.preferences.addons[__name__].preferences
-        active = bpy.context.object.active_material.node_tree.nodes.active.node_tree    
+        activeNode = context.object.active_material.node_tree.nodes.active
+        active = activeNode.node_tree    
         if not bpy.ops.node.tree_path_parent.poll():
             row = layout.row()
             col = row.column()
@@ -71,7 +72,10 @@ class ANGE_PT_AdvancedEdit(Panel):
             col.label(text= 'Output:')
             col.template_list('ANGE_UL_Ports', '', active, 'outputs', active, 'active_output')
             port, socket, index = getPort(active)
-            layout.prop(port, 'default_value')
+            if port.is_output:
+                layout.prop(activeNode.outputs[index], 'default_value')
+            else:
+                layout.prop(activeNode.inputs[index], 'default_value')
             if hasattr(port, 'min_value'):
                 row = layout.row(align= True)
                 row.prop(port, 'min_value') 
@@ -123,7 +127,8 @@ class ANGE_OT_Apply(Operator):
 
     def execute(self, context):
         ANGE = context.preferences.addons[__name__].preferences
-        active = context.object.active_material.node_tree.nodes.active.node_tree
+        activeNode = context.object.active_material.node_tree.nodes.active
+        active = activeNode.node_tree
         port, socket, index = getPort(active)
         socketType = ANGE.NodeSockets
 
@@ -131,7 +136,10 @@ class ANGE_OT_Apply(Operator):
         new = socket.new(socketType, port.name)
         default = eval("bpy.types." + socketType + ".bl_rna.properties['default_value']")
         try:
-            new.default_value = port.default_value
+            if port.is_output:
+                activeNode.outputs[-1].default_value = activeNode.outputs[index].default_value
+            else:
+                activeNode.inputs[-1].default_value = activeNode.inputs[index].default_value
         except:
             if default.is_array:
                 new.default_value = default.default_array
