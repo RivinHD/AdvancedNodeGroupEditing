@@ -7,7 +7,7 @@ bl_info = {
     "author" : "Rivin",
     "description" : "Allows you to edit futher parts of node group I/O",
     "blender" : (2, 83, 9),
-    "version" : (1, 0, 1),
+    "version" : (1, 0, 2),
     "location" : "Node > UI > Node",
     "category" : "Node"
 }
@@ -52,7 +52,11 @@ class ANGE_PT_AdvancedEdit(Panel):
     @classmethod
     def poll(cls, context):
         active = bpy.context.object.active_material.node_tree.nodes.active
-        return active != None and active.type == 'GROUP' and (active.node_tree.active_output != -1 or active.node_tree.active_input != -1)
+        if bpy.ops.node.tree_path_parent.poll():
+            access = (active.node_tree.active_output != -1 or active.node_tree.active_input != -1)
+        else:
+            access = True
+        return active != None and active.type == 'GROUP' and access
 
     def draw(self, context):
         layout = self.layout
@@ -66,6 +70,12 @@ class ANGE_PT_AdvancedEdit(Panel):
             col = row.column()
             col.label(text= 'Output:')
             col.template_list('ANGE_UL_Ports', '', active, 'outputs', active, 'active_output')
+            port, socket, index = getPort(active)
+            layout.prop(port, 'default_value')
+            if hasattr(port, 'min_value'):
+                row = layout.row(align= True)
+                row.prop(port, 'min_value') 
+                row.prop(port, 'max_value')
         row = layout.row(align= True)
         col = row.column(align= True)
         col.scale_x = 3
@@ -82,7 +92,11 @@ class ANGE_OT_GetTypeOfSelected(Operator):
     @classmethod
     def poll(cls, context):
         active = bpy.context.object.active_material.node_tree.nodes.active
-        return active != None and active.type == 'GROUP' and (active.node_tree.active_output != -1 or active.node_tree.active_input != -1)
+        if bpy.ops.node.tree_path_parent.poll():
+            access = (active.node_tree.active_output != -1 or active.node_tree.active_input != -1)
+        else:
+            access = True
+        return active != None and active.type == 'GROUP' and access
 
     def execute(self, context):
         ANGE = context.preferences.addons[__name__].preferences
@@ -101,7 +115,11 @@ class ANGE_OT_Apply(Operator):
     @classmethod
     def poll(cls, context):
         active = bpy.context.object.active_material.node_tree.nodes.active
-        return active != None and active.type == 'GROUP' and (active.node_tree.active_output != -1 or active.node_tree.active_input != -1)
+        if bpy.ops.node.tree_path_parent.poll():
+            access = (active.node_tree.active_output != -1 or active.node_tree.active_input != -1)
+        else:
+            access = True
+        return active != None and active.type == 'GROUP' and access
 
     def execute(self, context):
         ANGE = context.preferences.addons[__name__].preferences
@@ -112,13 +130,20 @@ class ANGE_OT_Apply(Operator):
         #Copy Data
         new = socket.new(socketType, port.name)
         default = eval("bpy.types." + socketType + ".bl_rna.properties['default_value']")
-        if default.is_array:
-            new.default_value = default.default_array
-        else:
-            new.default_value = default.default
-        if hasattr(new, 'min_value'):
-            new.min_value = default.soft_min
-            new.max_value = default.soft_max
+        try:
+            new.default_value = port.default_value
+        except:
+            if default.is_array:
+                new.default_value = default.default_array
+            else:
+                new.default_value = default.default
+        try:
+            new.min_value = port.min_value
+            new.max_value = port.max_value
+        except:
+            if hasattr(new, 'min_value'):
+                new.min_value = default.soft_min
+                new.max_value = default.soft_max
 
         # Copy Links
         portType = 'OUTPUT' if new.is_output else 'INPUT'
